@@ -4,150 +4,223 @@
 #include <vector>
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
+#include "ImgFeature.h"
 #include "SurfFeature.h"
 #include "Utils.h"
 #include "NearestNeighbors.h"
+#include "ImgConAna.h"
+#include "ostuRemoveBorder.h"
+
+#include <time.h>
+
 using namespace std;
 
-#define K_MEANS 6
+const int surfDescriptorSize = 64;
+const int denseSurfFeatureSize = 624 * surfDescriptorSize;
+const int clusterCount = 20;
+const int surfVladFeatureSize = clusterCount * surfDescriptorSize; 
 
-const int featureSize = 624 * 64;
 
-
-
-void train() {
+void learn() {
 	//图片库
-	// outfile  train()
-	ofstream outfile("C:\\Users\\CCK\\Desktop\\debug\\mfc_SurfFeature.txt");//**************************************************
-	string filepath = "E:\\AnXingle\\WorkSpace\\Test_Picture\\remove_border\\mfc";//**************************************************
+	string filepath = "D:\\SearchPictures\\2\\train";
 	vector<string> files;
 	getFiles(filepath, files);
-	//各个图片库的特征描述 TXT
+	cout << "Files read end." << endl;
+
+	clock_t start;
+	start = clock();
 	
-	outfile.precision(10);
+	int featureMatRows = 0;
+	vector<float* > featureArray;
+	size_t imgNums = files.size();
+	for (size_t n = 0; n < imgNums; ++n) {
+		Mat imgSrc = imread(files[n]);
 
-	size_t n = files.size();
-	cout << "All have: " << endl;
-	cout << n << endl;
-	for (size_t i = 0; i < n; ++i) 
-	{
-		outfile << files[i] << endl;
-		//读入图片
-		IplImage *img = cvLoadImage((files[i].c_str()), CV_LOAD_IMAGE_COLOR);
-
-		//提取surf特征
-		SurfFeature sfeature;
-		
-		sfeature.computeFeature(img);
-		
-		float* feature = sfeature.GetFeature();
-		
-		for(int index = 0; index < featureSize; index++)
-		{
-			outfile<<feature[index]<<" ";
+		vector<Mat> proposals;
+		proposalMat(imgSrc,proposals);
+		size_t pNums = proposals.size();
+		featureMatRows += pNums;
+		for (size_t i = 0; i < pNums; ++i) {
+			IplImage img = IplImage(proposals[i]);
+			// 归一化图片
+			IplImage* stdImg= cvCreateImage( cvSize(240,260), IPL_DEPTH_8U, 3);
+			cvResize(&img, stdImg, CV_INTER_LINEAR);
+			// 提取Surf特征
+			SurfFeature sfeature;
+			sfeature.computeFeature(stdImg);
+			float* feature = sfeature.GetFeature();
+			featureArray.push_back(feature);
+			cout << files[n] << ":" << i << " end." << endl;
+			cvReleaseImage(&stdImg);
 		}
-		outfile<<endl;
-		cout << i << endl;
-		cout << files[i] << " End." << endl;
-		sfeature.FreeFeature(feature);
-
-		cvReleaseImage(&img);
+	}
+	Mat featureMat(featureMatRows, surfDescriptorSize, CV_32F);
+	for (int r = 0; r < featureMatRows; ++r) {
+		float* feature = featureArray[r];
+		for (int c = 0; c < surfDescriptorSize; ++c) {
+			featureMat.at<float>(r, c) = *feature;
+			++feature;
+		}
+	}
+	// 释放Surf特征
+	for (int i = 0 ; i < featureMatRows; ++i) freeArray(featureArray[i]);
+	
+	// K-means聚类码本
+	Mat centers(clusterCount, 1, featureMat.type());
+	Mat labels;
+	double cretia = kmeans(featureMat, clusterCount, labels, TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 50, 0.1), 3, KMEANS_PP_CENTERS, centers);
+	cout << "紧凑度： " << cretia << endl;
+	//写码本
+	ofstream outfile("D:\\SearchPictures\\2\\features\\centers.txt");
+	outfile.precision(8);
+	for (int r = 0; r < clusterCount; ++r) {
+		for (int c = 0; c < surfDescriptorSize; ++c) {
+			outfile << centers.at<float>(r, c) << " ";
+		}
+		outfile << endl;
 	}
 	outfile.close();
+	//string binaryOutfile = "..\\..\\center.bin";
+	//mat2Bin(binaryOutfile.c_str(), featureMat);
+	clock_t end = clock();
+	cout << "Total Time: " << (float)(end - start) / CLOCKS_PER_SEC << endl;
+}
+
+void train() {
+	//Load 码本
+	string vocabularyFile = "D:\\SearchPictures\\2\\features\\centers.txt";
+	float** vocabulary = newMatrix(clusterCount, surfDescriptorSize);
+	loadVocabulary(vocabularyFile, vocabulary, clusterCount, surfDescriptorSize);
+
+	string filepath = "D:\\SearchPictures\\2\\train";
+	vector<string> files;
+	getFiles(filepath, files);
+
+	//图片库路径表
+	ofstream imagePathOutfile("D:\\SearchPictures\\2\\features\\imagePath.txt");
+	//ofstream outfile("..\\..\\surfValdFeature.txt");
+	//图片库特征表
+	FILE* fin;
+	fin = fopen("D:\\SearchPictures\\2\\features\\surfValdFeature.bin", "wb");
+
+	size_t imgNums = files.size();
+	imagePathOutfile << imgNums << endl;
+	for (size_t n = 0; n < imgNums; ++n) {
+		Mat imgSrc = imread(files[n]);
+
+		vector<Mat> proposals;
+		proposalMat(imgSrc, proposals);
+		size_t pNums = proposals.size();
+		imagePathOutfile << files[n] << endl;
+		imagePathOutfile << pNums << endl;
+
+		for (size_t i = 0; i < pNums; ++i) {
+			Mat stdImg;
+			resize(proposals[i], stdImg, Size(240, 260));
+			// 提取Surf&VLAD特征
+			ImgFeature feature(stdImg);
+			feature.computeSurfVladFeature(vocabulary, clusterCount, surfDescriptorSize);
+			float* featureArray = feature.GetFeature();
+			feature2Bin(featureArray, clusterCount * surfDescriptorSize, fin);
+			//for (int j = 0; j < clusterCount * surfDescriptorSize; ++j) outfile << featureArray[j] << " ";
+			//outfile << endl;
+			cout << files[n] << ":" << i << " end." << endl;
+			feature.FreeFeature(featureArray);
+		}
+	}
+	imagePathOutfile.close();
+	fclose(fin);
 }
 
 void test() {
-	// 各个图片库的特征描述 TXT
-	//featureFile Test()
-	string featureFile = "C:\\Users\\CCK\\Desktop\\debug\\mfc_SurfFeature.txt";//**************************************************
-	unordered_map<string, string> trainImageMap;
-	unordered_map<string, vector<pair<string, float*> > > trainFeatureMap;
-	LoadFeature(featureFile, featureSize, trainFeatureMap, trainImageMap);
-	cout << "Load train feature end: " << trainFeatureMap.size() << endl;
+	// load vocabulary
+	string vocabularyFile = "E:\\AnXingle\\Search_Project\\QiChengZuo\\fileFeatures\\centers.txt";
+	//加载码本
+	float** vocabulary = newMatrix(clusterCount, surfDescriptorSize);
+	loadVocabulary(vocabularyFile, vocabulary, clusterCount, surfDescriptorSize);
+	cout << "Load Vocabulary End. " << endl;
 
-	// 测试图片文件
-	string testPath = "E:\\AnXingle\\WorkSpace\\Test_Picture\\remove_border\\Test_mfc";//*************************************************************************
-	// testFiles：该文件夹下的所有图片们
+	// Load train image feature
+	string trainFile = "E:\\AnXingle\\Search_Project\\QiChengZuo\\fileFeatures\\imagePath.txt";
+	string featureFile = "E:\\AnXingle\\Search_Project\\QiChengZuo\\fileFeatures\\surfValdFeature.bin";
+	unordered_map<string, vector<float*> > trainFeatureMap;
+	loadFeatureBin(trainFile, featureFile, surfVladFeatureSize, trainFeatureMap);
+	cout << "Load Train Feature End: " << trainFeatureMap.size() << endl;
+
+	// Load test file 
+	/*************************          需要知道 testFiles的结构           *************************/
+	/********************          testFiles  E:\\AnXingle\\Search_Project\\z1.jpg        *********/
+	string testPath = "E:\\AnXingle\\Search_Project\\QiChengZuo\\test";
 	vector<string> testFiles;
 	getFiles(testPath, testFiles);
 
-	// extract test image feature
-	unordered_map<string, string> testImageMap;
-	unordered_map<string, vector<pair<string, float*> > > testFeatureMap;
-	size_t n = testFiles.size();
-	for (size_t i = 0; i < n; ++i) {
-		string imagePath = testFiles[i];
-		cout << "imagePath: ";
-		cout << imagePath << endl;
-		string imageName = splitFileName(imagePath);
-		if (testImageMap.count(imageName) == 0) {
-			string prefixPath = imagePath.substr(0, imagePath.find_last_of("_"));
-			string suffixPath = imagePath.substr(imagePath.find_last_of("."));
-			testImageMap[imageName] = prefixPath + "_0" + suffixPath;
+	int K = 6;
+	string rootPath = "..\\..\\QiChengZuo_result\\";
+	system("rd /s/q ..\\..\\QiChengZuo_result");
+	system("md ..\\..\\QiChengZuo_result");
+
+	// extract test image feature && find K-nearest images
+	size_t testNum = testFiles.size();
+	for (size_t t = 0; t < testNum; ++t)
+	{
+		Mat imgSrc = imread(testFiles[t]);
+		vector<Mat> proposals;
+		proposalMat(imgSrc, proposals);
+		size_t pNums = proposals.size();
+		// extract features
+		vector<float* > testFeatures;
+		for (size_t i = 0; i < pNums; ++i) {
+			Mat stdImg;
+			resize(proposals[i], stdImg, Size(240, 260));
+			// 提取Surf&VLAD特征
+			ImgFeature feature(stdImg);
+			feature.computeSurfVladFeature(vocabulary, clusterCount, surfDescriptorSize);
+			float* featureArray = feature.GetFeature();
+			testFeatures.push_back(featureArray);
 		}
-
-		//读入图片
-		IplImage *img = cvLoadImage((imagePath.c_str()), CV_LOAD_IMAGE_COLOR);
-
-		//提取DenseSurf
-		SurfFeature surfFeature;
-		surfFeature.computeFeature(img);
-		float* feature = surfFeature.GetFeature();
-
-		testFeatureMap[imageName].push_back(make_pair(imagePath, feature));
-		cout << imagePath << " End." << endl;
-		//surfFeature.FreeFeature(feature);
-		cvReleaseImage(&img);
-	}
-
-	cout << "test map size: " << testImageMap.size() << endl;
-
-	// K近邻 的 K值
-	int K = K_MEANS;
-	string rootPath = "..\\..\\result_mfc\\";//**********************************************************************************************************
-	string rm = "rd " + rootPath;
-	string mk = "md" + rootPath;
-	//system(rm.c_str());
-	//system(mk.c_str());
-	// K-nearest image
-	int index = 0;
-	for (auto& imageMap : testImageMap) {
-		++index;
-		string outPath = rootPath + intToString(index);
+		/*************      写入result文件夹，test中的测试文件         *************/
+		string outPath = rootPath + intToString(t + 1);
 		string mkidr = "md " + outPath;
 		system(mkidr.c_str());
+		string newTestPath = outPath + "\\" + splitFileName(testFiles[t]);
+		imwrite(newTestPath.c_str(), imgSrc);
 
-		string testImageName = imageMap.first;
-		string testImagePath = imageMap.second;
-		IplImage *img = cvLoadImage((testImagePath.c_str()), CV_LOAD_IMAGE_COLOR);
-		string suffixPath = testImagePath.substr(testImagePath.find_last_of("."));
-		string newImagePath = outPath + "\\" + testImageName + suffixPath;
-		cvSaveImage(newImagePath.c_str(), img);
-		cvReleaseImage(&img);
-
+		// K-nearest neighbors search
+		/*******************       计算最近邻的匹配结果图片             **********************/
 		vector<pair<string, double> > disMap;
-		computeKNearestImage(testFeatureMap[testImageName], featureSize, trainFeatureMap, trainImageMap, K, disMap);//
-		cout << "disMap is: " << endl;//  
+		computeKNearestImage(testFeatures, trainFeatureMap, surfVladFeatureSize, K, disMap);
 		cout << disMap.size() << endl;
-		for (int i = 0; i < K; ++i) {
+
+		//string disFilePath = outPath + "\\" + "dis.txt";
+		//ofstream disFile(disFilePath.c_str());
+		for (int i = 0; i < K; ++i)
+		{
+			//disFile << (i + 1) << " : " << disMap[i].second << endl;
+			/**********     trainImagePath   E:\\Anxingle\\Search_Project\\train\\123.jpg     **************/
+			/*************          trainImageName   123.jpg                    ****************************/
 			string trainImagePath = disMap[i].first;
-			string trainImageName = trainImagePath.substr(trainImagePath.find_last_of("/\\") + 1);
+			string trainImageName = splitFileName(trainImagePath);
 			IplImage *img = cvLoadImage((trainImagePath.c_str()), CV_LOAD_IMAGE_COLOR);
-			string newImagePath = outPath + "\\" + intToString(i + 1) + "_"+  trainImageName;
+			string newImagePath = outPath + "\\" + intToString(i + 1) + "_" + trainImageName;
 			cvSaveImage(newImagePath.c_str(), img);
 			cvReleaseImage(&img);
 		}
+		//disFile.close();
+		// release
+		freeVectorArray(testFeatures);
+		cout << "Test " << t << " End." << endl;
 	}
+	// release
+	freeMatrix(vocabulary, clusterCount);
 	freeFeatureMap(trainFeatureMap);
-	freeFeatureMap(testFeatureMap);
 }
 
 int main()
 {
-	// train  已经进行到 5  了
+	learn();
 	train();
-	test();
-	//system("pause");
-
+	//test();
+	system("pause");
 	return 0;
 }

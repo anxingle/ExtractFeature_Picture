@@ -17,15 +17,15 @@ double vecDistance(float *array1, float *array2, int len)
 	return sqrt(result);
 }
 
-double computeDistance(vector<pair<string, float*> >& testFeature, vector<pair<string, float*> >& trainFeature, int featureSize) {
-	double maxDis = 0.0;
+double computeDistance(vector<float*>& testFeature, vector<float*>& trainFeature, int featureSize) {
+	double minDis = numeric_limits<double>::max();
 	for (int i = 0; i < testFeature.size(); ++i) {
 		for (int j = 0; j < trainFeature.size(); ++j) {
-			double dis = vecDistance(testFeature[i].second, trainFeature[j].second, featureSize);
-			if (dis > maxDis) maxDis = dis;
+			double dis = vecDistance(testFeature[i], trainFeature[j], featureSize);
+			if (dis < minDis) minDis = dis;
 		}
 	}
-	return maxDis;
+	return minDis;
 }
 
 void insertDis(string path, double dis, vector<pair<string, double> >& disMap) {
@@ -41,16 +41,16 @@ void insertDis(string path, double dis, vector<pair<string, double> >& disMap) {
 		}
 	}
 }
-void computeKNearestImage(vector<pair<string, float*> >& testFeature,
+
+void computeKNearestImage(vector<float*>& testFeature, 
+						  unordered_map<string, vector<float*> >& trainFeatureMap,
 						  int featureSize,
-						  unordered_map<string, vector<pair<string, float*> > >& trainFeatureMap,
-						  unordered_map<string, string>& trainImageMap,
 						  int K,
 						  vector<pair<string, double> >& disMap) {
-	for (auto& imageMap : trainImageMap) {
-		string trainImageName =imageMap.first;
-		string trainImagePath = imageMap.second;
-		double dis = computeDistance(testFeature, trainFeatureMap[trainImageName], featureSize);
+	for (auto& trainImage : trainFeatureMap) {
+		string trainImagePath = trainImage.first;
+		vector<float* > trainFeature = trainImage.second;
+		double dis = computeDistance(testFeature, trainFeature, featureSize);
 		if (disMap.size() < K) {
 			insertDis(trainImagePath, dis, disMap);
 		} else {

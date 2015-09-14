@@ -5,10 +5,9 @@
 #include <unordered_map>
 using namespace std;
 
-void computeKNearestImage(vector<pair<string, float*> >& testFeature, 
+void computeKNearestImage(vector<float*>& testFeature, 
+						  unordered_map<string, vector<float*> >& trainFeatureMap,
 						  int featureSize,
-						  unordered_map<string, vector<pair<string, float*> > >& trainFeatureMap,
-						  unordered_map<string, string>& trainImageMap,
 						  int K,
 						  vector<pair<string, double> >& disMap);
 
